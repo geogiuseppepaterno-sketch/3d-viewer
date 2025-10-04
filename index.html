@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Model Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            overflow: hidden;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            text-align: center;
+            z-index: 10;
+        }
+        
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 25px;
+            border-radius: 30px;
+            color: white;
+            font-size: 14px;
+            backdrop-filter: blur(10px);
+            z-index: 5;
+        }
+        
+        #error {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(220, 38, 38, 0.95);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            max-width: 500px;
+            text-align: center;
+            z-index: 10;
+        }
+        
+        #error h2 {
+            margin-bottom: 15px;
+        }
+        
+        #error p {
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    
+    <div id="loading">
+        <div class="spinner"></div>
+        <div>Caricamento modello 3D...</div>
+        <div id="progress" style="margin-top: 10px; font-size: 14px;"></div>
+    </div>
+    
+    <div id="error">
+        <h2>⚠️ Errore di caricamento</h2>
+        <p id="errorMessage"></p>
+        <p style="font-size: 12px; margin-top: 15px; opacity: 0.9;">Verifica che i link siano corretti e pubblicamente accessibili.</p>
+    </div>
+    
+    <div id="controls">
+        🖱️ Click sinistro: Ruota | 🖱️ Click destro: Pan | 🖱️ Scroll: Zoom
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // ============================================
+        // CONFIGURAZIONE - INSERISCI I TUOI LINK QUI
+        // ============================================
+        
+        const CONFIG = {
+            // Link diretto al file OBJ da Google Drive
+            objUrl: 'https://drive.google.com/uc?export=download&id=143GlTN5AnjOFL6w4rhPUfyHxaTFz5NTH',
+            
+            // Link diretto al file MTL da Google Drive
+            mtlUrl: 'https://drive.google.com/uc?export=download&id=15BIx0c8HETWjjIiGcInO_9HwkAfiVOc7',
+            
+            // Percorso base per le texture (se presenti)
+            texturePath: ''
+        };
+        
+        // ============================================
+        // SETUP SCENA
+        // ============================================
+        
+        let scene, camera, renderer, controls;
+        let model;
+        
+        const container = document.getElementById('container');
+        const loadingDiv = document.getElementById('loading');
+        const errorDiv = document.getElementById('error');
+        const progressDiv = document.getElementById('progress');
+        
+        function init() {
+            // Scena
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f0f0);
+            
+            // Camera
+            camera = new THREE.PerspectiveCamera(
+                45,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                10000
+            );
+            camera.position.set(5, 5, 5);
+            
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+            
+            // Luci
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 10, 10);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+            
+            const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+            directionalLight2.position.set(-10, 5, -10);
+            scene.add(directionalLight2);
+            
+            // Griglia
+            const gridHelper = new THREE.GridHelper(20, 20, 0x888888, 0xcccccc);
+            scene.add(gridHelper);
+            
+            // Controlli (OrbitControls manuale)
+            setupControls();
+            
+            // Gestione resize
+            window.addEventListener('resize', onWindowResize);
+            
+            // Carica modello
+            loadModel();
+            
+            // Avvia animazione
+            animate();
+        }
+        
+        // ============================================
+        // CARICAMENTO MODELLO
+        // ============================================
+        
+        function loadModel() {
+            if (!CONFIG.objUrl || CONFIG.objUrl === 'INSERISCI_LINK_OBJ_QUI') {
+                showError('Devi inserire i link ai file OBJ e MTL nel codice!');
+                return;
+            }
+            
+            const manager = new THREE.LoadingManager();
+            
+            manager.onProgress = function(url, loaded, total) {
+                const percent = Math.round((loaded / total) * 100);
+                progressDiv.textContent = `${percent}%`;
+            };
+            
+            manager.onLoad = function() {
+                loadingDiv.style.display = 'none';
+                console.log('Modello caricato con successo!');
+            };
+            
+            manager.onError = function(url) {
+                showError(`Errore nel caricamento: ${url}`);
+            };
+            
+            // Carica MTL
+            const mtlLoader = new THREE.MTLLoader(manager);
+            
+            if (CONFIG.mtlUrl && CONFIG.mtlUrl !== 'INSERISCI_LINK_MTL_QUI') {
+                mtlLoader.load(
+                    CONFIG.mtlUrl,
+                    function(materials) {
+                        materials.preload();
+                        
+                        // Carica OBJ con materiali
+                        const objLoader = new THREE.OBJLoader(manager);
+                        objLoader.setMaterials(materials);
+                        objLoader.load(
+                            CONFIG.objUrl,
+                            onModelLoaded,
+                            onProgress,
+                            onError
+                        );
+                    },
+                    onProgress,
+                    function(err) {
+                        console.warn('MTL non caricato, carico solo OBJ:', err);
+                        loadOBJOnly(manager);
+                    }
+                );
+            } else {
+                loadOBJOnly(manager);
+            }
+        }
+        
+        function loadOBJOnly(manager) {
+            const objLoader = new THREE.OBJLoader(manager);
+            objLoader.load(
+                CONFIG.objUrl,
+                onModelLoaded,
+                onProgress,
+                onError
+            );
+        }
+        
+        function onModelLoaded(obj) {
+            model = obj;
+            
+            // Centra il modello
+            const box = new THREE.Box3().setFromObject(model);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            
+            model.position.sub(center);
+            
+            // Scala automatica
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const scale = 5 / maxDim;
+            model.scale.setScalar(scale);
+            
+            scene.add(model);
+            
+            // Posiziona camera
+            camera.position.set(maxDim * 0.8, maxDim * 0.6, maxDim * 0.8);
+            camera.lookAt(0, 0, 0);
+        }
+        
+        function onProgress(xhr) {
+            if (xhr.lengthComputable) {
+                const percent = Math.round((xhr.loaded / xhr.total) * 100);
+                progressDiv.textContent = `${percent}%`;
+            }
+        }
+        
+        function onError(err) {
+            showError('Impossibile caricare il modello. Verifica i link e che siano pubblicamente accessibili.');
+            console.error(err);
+        }
+        
+        function showError(message) {
+            loadingDiv.style.display = 'none';
+            errorDiv.style.display = 'block';
+            document.getElementById('errorMessage').textContent = message;
+        }
+        
+        // ============================================
+        // CONTROLLI MANUALI (OrbitControls-like)
+        // ============================================
+        
+        function setupControls() {
+            let isDragging = false;
+            let isPanning = false;
+            let previousMousePosition = { x: 0, y: 0 };
+            
+            renderer.domElement.addEventListener('mousedown', function(e) {
+                if (e.button === 0) isDragging = true;
+                if (e.button === 2) isPanning = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+            
+            renderer.domElement.addEventListener('mouseup', function() {
+                isDragging = false;
+                isPanning = false;
+            });
+            
+            renderer.domElement.addEventListener('mousemove', function(e) {
+                if (isDragging && model) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+                    
+                    model.rotation.y += deltaX * 0.01;
+                    model.rotation.x += deltaY * 0.01;
+                }
+                
+                if (isPanning) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+                    
+                    camera.position.x -= deltaX * 0.01;
+                    camera.position.y += deltaY * 0.01;
+                }
+                
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+            
+            renderer.domElement.addEventListener('wheel', function(e) {
+                e.preventDefault();
+                const delta = e.deltaY * 0.01;
+                camera.position.z += delta;
+                camera.position.z = Math.max(1, Math.min(50, camera.position.z));
+            });
+            
+            renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+        }
+        
+        // ============================================
+        // ANIMAZIONE E RESIZE
+        // ============================================
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        // Avvia tutto
+        init();
+    </script>
+</body>
+</html>
